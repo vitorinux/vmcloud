@@ -1,0 +1,384 @@
+name: vmcloud-nextcloud
+version: 1.0.0
+summary: Nextcloud 15.0.10 Optimized-Boosted
+description: |
+ Best performance, and update some date to run properly on Ubuntu-18.04-Server
+  Optimized files MySQL-PHP-fpm-REDIS-Apache
+
+grade: stable
+confinement: strict
+
+apps:
+  # Apache daemon
+  apache:
+    command: run-httpd -k start -DFOREGROUND
+    stop-command: httpd-wrapper -k stop
+    daemon: simple
+    restart-condition: always
+    plugs: [network, network-bind, removable-media]
+
+  # MySQL daemon
+  mysql:
+    command: start_mysql
+    stop-command: support-files/mysql.server stop
+    daemon: simple
+    restart-condition: always
+    plugs: [network, network-bind]
+
+  # PHP FPM daemon
+  php-fpm:
+    command: start-php-fpm
+    daemon: simple
+    restart-condition: always
+    plugs: [network, network-bind, removable-media]
+
+  # redis server daemon
+  redis-server:
+    command: start-redis-server
+    daemon: simple
+    restart-condition: always
+    plugs: [network, network-bind]
+
+  # mDNS daemon
+  mdns-publisher:
+    command: delay-on-failure mdns-publisher nextcloud
+    daemon: simple
+    restart-condition: always
+    plugs: [network, network-bind]
+
+  # MySQL client
+  mysql-client:
+    command: run-mysql
+    plugs: [network, network-bind]
+
+  mysqldump:
+    command: mysqldump --defaults-file=$SNAP_DATA/mysql/root.ini --lock-tables nextcloud
+    plugs: [network, network-bind]
+
+  # Nextcloud occ command
+  occ:
+    command: occ
+    plugs: [network, network-bind, removable-media]
+
+  enable-https:
+    command: enable-https
+    plugs: [network, network-bind]
+
+  disable-https:
+    command: disable-https
+    plugs: [network, network-bind]
+
+  renew-certs:
+    command: renew-certs
+    daemon: simple
+    restart-condition: always
+    plugs: [network, network-bind]
+
+  nextcloud-cron:
+    command: nextcloud-cron
+    daemon: simple
+    restart-condition: on-failure
+    plugs: [network, network-bind, removable-media]
+
+  # Command for manually installing instead of visiting site to create admin.
+  manual-install:
+    command: manual-install
+    plugs: [network, network-bind, removable-media]
+
+  import:
+    command: import-data
+    plugs: [network, network-bind, removable-media]
+
+  export:
+    command: export-data
+    plugs: [network, network-bind, removable-media]
+
+  # Service for automatically fixing Nextcloud indices, etc.
+  nextcloud-fixer:
+    command: nextcloud-fixer
+    daemon: simple
+    restart-condition: on-failure
+    plugs: [network, network-bind, removable-media]
+
+hooks:
+  configure:
+    plugs: [network, network-bind]
+
+parts:
+  apache:
+    plugin: apache
+    source: http://ftp.wayne.edu/apache/httpd/httpd-2.4.39.tar.bz2
+    source-checksum: sha256/b4ca9d05773aa59b54d66cd8f4744b945289f084d3be17d7981d1783a5decfa2
+
+    override-pull: |
+      snapcraftctl pull
+
+      # For some reason, all directories in (and after) 2.4.32 are setgid.
+      # Reported as https://bz.apache.org/bugzilla/show_bug.cgi?id=62298
+      # Work around by unsetting setgid. FIXME: Remove when bug is fixed.
+      find . -perm -g+s -exec chmod g-s {} \;
+
+    # The built-in Apache modules to enable
+    modules:
+      - headers
+      - proxy
+      - proxy_fcgi
+      - setenvif
+      - env
+      - rewrite
+      - mime
+      - dir
+      - authz_core
+      - unixd
+      - alias
+      - ssl
+      - socache_shmcb
+
+    filesets:
+      exclude:
+        - -man
+        - -manual
+        - -htdocs
+        - -include
+        - -build
+        - -conf/httpd.conf
+        - -conf/magic
+        - -conf/original
+        - -conf/extra
+        - -bin/apachectl
+        - -bin/envvars*
+    stage:
+      - $exclude
+    prime:
+      - $exclude
+
+  apache-customizations:
+    plugin: dump
+    source: src/apache/
+
+  nextcloud:
+    plugin: dump
+    source: https://download.nextcloud.com/server/releases/nextcloud-15.0.10.tar.bz2
+    source-checksum: sha256/494511fcda6e823e8dfb571fcf3b9ddc433148449acb080104f4165d2f2f4d43
+    organize:
+      '*': htdocs/
+      '.htaccess': htdocs/.htaccess
+      '.user.ini': htdocs/.user.ini
+
+    # This snap automatically updates. No need to include the updater to nag
+    # users. This does not result in an integrity check failure.
+    prime:
+      - -htdocs/apps/updatenotification
+
+  php:
+    plugin: php
+    source: https://php.net/get/php-7.2.19.tar.bz2/from/this/mirror
+    source-checksum: sha256/ebd0b1f375fe07ed4925acc213d2f5ef76a61bd5de174e7b666b98421a90a099
+    source-type: tar
+    install-via: prefix
+    configflags:
+      - --enable-fpm
+      - --disable-cgi
+      - --disable-phar
+      - --disable-phpdbg
+      - --enable-ctype
+      - --enable-mbstring
+      - --enable-zip
+      - --with-pdo-mysql
+      - --with-zlib
+      - --with-gd
+      - --with-curl
+      - --with-openssl
+      - --with-bz2
+      - --enable-exif
+      - --enable-intl
+      - --enable-pcntl
+      - --with-jpeg-dir=/usr/lib
+      - --with-freetype-dir=/usr/lib
+      - --disable-rpath
+      - --enable-ftp
+
+      # Enable ldap.
+      - --with-libdir=lib/$SNAPCRAFT_ARCH_TRIPLET
+      - --with-ldap
+    stage-packages:
+      # These are only included here until the OS snap stabilizes
+      - libxml2
+      - libpng16-16
+    build-packages:
+      - libxml2-dev
+      - libcurl4-openssl-dev
+      - libpng-dev
+      - libjpeg9-dev
+      - libbz2-dev
+      - libmcrypt-dev
+      - libldap2-dev
+      - libfreetype6-dev
+    prime:
+     - -sbin/
+     - -etc/
+    organize:
+      # Put php-fpm in bin with everything else, not sbin.
+      sbin/php-fpm: bin/php-fpm
+    extensions:
+      # Build the redis PHP module
+      - source: https://github.com/phpredis/phpredis/archive/3.1.4.tar.gz
+        source-checksum: sha256/656cab2eb93bd30f30701c1280707c60e5736c5420212d5d547ebe0d3f4baf71
+
+  redis:
+    plugin: redis
+    source: http://download.redis.io/releases/redis-4.0.13.tar.gz
+    source-checksum: sha256/17d955227966dcd68590be6139e5fe7f2d19fc4fb7334248a904ea9cdd30c1d4
+
+  redis-customizations:
+    plugin: dump
+    source: src/redis/
+    organize:
+      config/*: config/redis/
+
+  # Copy over our PHP configuration file.
+  php-customizations:
+    plugin: dump
+    source: src/php/
+    organize:
+      config/*: config/php/
+    stage-packages: [mawk, libfcgi0ldbl]
+
+  # Copy over our Nextcloud configuration files
+  nextcloud-customizations:
+    plugin: dump
+    source: src/nextcloud/
+    organize:
+      config/: htdocs/config/
+    stage-packages: [jq]
+
+  # Download the boost headers for MySQL. Note that the version used may need to
+  # be updated if the version of MySQL changes.
+  boost:
+    plugin: dump
+    source: https://github.com/kyrofa/boost_tarball/raw/master/boost_1_59_0.tar.gz
+    source-checksum: sha1/5123209db194d66d69a9cfa5af8ff473d5941d97
+    # When building MySQL, the headers in the source directory 'boost/' are
+    # required. Previously, using the 'copy' plugin, the whole archive was put
+    # under 'boost/', making the headers reside in 'boost/boost/'. Due to a bug,
+    # we now only stage the 'boost/' directory without moving it.
+    #
+    # Bug: https://bugs.launchpad.net/snapcraft/+bug/1757093
+    stage:
+      - boost/
+    prime:
+      - -*
+
+  mysql:
+    plugin: cmake
+    source: https://github.com/mysql/mysql-server.git
+    source-tag: mysql-5.7.26
+    source-depth: 1
+    override-pull: |
+      snapcraftctl pull
+      git apply $SNAPCRAFT_STAGE/mysql-support-compile-time-disabling-of-setpriority.patch
+    after: [boost, patches]
+    configflags:
+      - -DWITH_BOOST=$SNAPCRAFT_STAGE
+      - -DWITH_INNODB_PAGE_CLEANER_PRIORITY=OFF
+      - -DCMAKE_INSTALL_PREFIX=/
+      - -DBUILD_CONFIG=mysql_release
+      - -DWITH_UNIT_TESTS=OFF
+      - -DWITH_EMBEDDED_SERVER=OFF
+      - -DWITH_ARCHIVE_STORAGE_ENGINE=OFF
+      - -DWITH_BLACKHOLE_STORAGE_ENGINE=OFF
+      - -DWITH_FEDERATED_STORAGE_ENGINE=OFF
+      - -DWITH_PARTITION_STORAGE_ENGINE=OFF
+      - -DINSTALL_MYSQLTESTDIR=
+    build-packages:
+      - wget
+      - g++
+      - cmake
+      - bison
+      - libncurses5-dev
+      - libaio-dev
+    stage:
+      # Remove scripts that we'll be replacing with our own
+      - -support-files/mysql.server
+      - -COPYING
+    prime:
+      # Remove scripts that we'll be replacing with our own
+      - -support-files/mysql.server
+
+      # Remove unused binaries that waste space
+      - -bin/innochecksum
+      - -bin/lz4_decompress
+      - -bin/myisam*
+      - -bin/mysqladmin
+      - -bin/mysqlbinlog
+      - -bin/mysql_client_test
+      - -bin/mysql_config*
+      - -bin/mysqld_multi
+      - -bin/mysqlimport
+      - -bin/mysql_install_db
+      - -bin/mysql_plugin
+      - -bin/mysqlpump
+      - -bin/mysql_secure_installation
+      - -bin/mysqlshow
+      - -bin/mysqlslap
+      - -bin/mysql_ssl_rsa_setup
+      - -bin/mysqltest
+      - -bin/mysql_tzinfo_to_sql
+      - -bin/perror
+      - -bin/replace
+      - -bin/resolveip
+      - -bin/resolve_stack_dump
+      - -bin/zlib_decompress
+
+  # Copy over our MySQL scripts
+  mysql-customizations:
+    plugin: dump
+    source: src/mysql/
+
+  patches:
+    source: src/patches
+    plugin: dump
+    prime:
+      - -*
+
+  mdns-publisher:
+    plugin: godeps
+    source: https://github.com/kyrofa/mdns-publisher.git
+    go-importpath: github.com/kyrofa/mdns-publisher
+
+  delay-on-failure:
+    plugin: dump
+    source: src/delay-on-failure/
+
+  certbot:
+    plugin: python
+    python-version: python2
+    source: src/https/
+    requirements: requirements.txt
+    build-packages: [libffi-dev]
+    after: [patches]
+    override-build: |
+      snapcraftctl build
+      patch -p1 -d $SNAPCRAFT_PART_INSTALL/lib/python2.7/site-packages/certbot < $SNAPCRAFT_STAGE/certbot-remove-default-config-files.patch
+      patch -p1 -d $SNAPCRAFT_PART_INSTALL/lib/python2.7/site-packages/certbot < $SNAPCRAFT_STAGE/certbot-remove-storage-chown.patch
+
+  setup-https:
+    plugin: dump
+    source: src/https/
+    stage-packages: [openssl]
+    stage: [-etc/ssl, -requirements.txt]
+
+  import-export:
+    plugin: dump
+    source: src/import-export
+    stage-packages: [rsync]
+
+  common:
+    plugin: dump
+    source: src/common/
+
+  hooks:
+    plugin: dump
+    source: src/hooks/
+    organize:
+      bin/: snap/hooks/
