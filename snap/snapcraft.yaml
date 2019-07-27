@@ -1,6 +1,6 @@
 name: vmcloud-nextcloud
 version: 1.0.0
-summary: Nextcloud 15.0.10 Optimized-Boosted
+summary: Nextcloud 16.0.3 Optimized-Boosted
 description: |
  Best performance, and update some date to run properly on Ubuntu-18.04-Server
   Optimized files MySQL-PHP-fpm-REDIS-Apache
